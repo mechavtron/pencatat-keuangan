@@ -15,39 +15,72 @@ interface ParsedItem {
 function parseBatchText(text: string): ParsedItem[] {
   const items: ParsedItem[] = []
 
-  // Normalisasi spasi dan hapus header bot Telegram
-  const clean = text
+  // 1. Bersihkan spasi khusus Telegram & header bot
+  let cleaned = text
     .replace(/\u00A0/g, ' ')
-    .replace(/Berhasil dicatat!/gi, '')
+    .replace(/✅?\s*Berhasil dicatat!\s*✨?/gi, '')
     .replace(/✨\s*\.\s*✨/g, '')
 
-  // Ekstrak langsung pola: [Nama Transaksi] [Kategori Opsional] — Rp [Nominal]
-  const pattern = /(.*?)(?:Lainnya|Belanja|Tagihan|Makanan|Pendidikan|Transportasi|Kesehatan|Rutin)?\s*[\—\-–]?\s*Rp\.?\s*([\d\.\,]+(?:\s*(?:k|rb|ribu|jt|juta))?)/gi
+  // 2. Jika teks tertempel menyatu 1 baris, selipkan Enter (\n) di setiap akhir nominal angka
+  cleaned = cleaned.replace(/((?:Rp\.?\s*)?\d+(?:[\.\,]\d+)*(?:\s*(?:k|rb|ribu|jt|juta))?)\s+([a-zA-Z✨🛍️🏠\d]{2,})/gi, '$1\n$2')
 
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(clean)) !== null) {
-    const rawDesc = match[1] || ''
-    const rawNum = match[2] || ''
+  // Selipkan Enter jika ada penomoran urut ganda (1., 2., 10.)
+  cleaned = cleaned.replace(/(\s\d{1,2}[\.\)]\s*)/g, '\n$1')
 
-    // Parse Angka Nominal
-    const cleanNum = rawNum.replace(/\./g, '').replace(',', '.')
-    let amount = 0
+  // 3. Pecah teks menjadi per baris
+  const lines = cleaned.split('\n')
 
-    if (/k|rb|ribu/i.test(cleanNum)) {
-      amount = parseFloat(cleanNum.replace(/k|rb|ribu/gi, '')) * 1000
-    } else if (/jt|juta/i.test(cleanNum)) {
-      amount = parseFloat(cleanNum.replace(/jt|juta/gi, '')) * 1000000
-    } else {
-      amount = parseFloat(cleanNum)
+  for (let line of lines) {
+    line = line.trim()
+    if (!line) continue
+
+    // Cari semua pola angka dalam 1 baris (termasuk Rp 1.400.000, 1400000, 50k, 1.5jt)
+    const amountRegex = /(?:Rp\.?\s*)?(\d+(?:[\.\,]\d+)*(?:\s*(?:k|rb|ribu|jt|juta))?)/gi
+    const matches = Array.from(line.matchAll(amountRegex))
+
+    if (matches.length === 0) continue
+
+    // Ambil nominal utama (angka terbesar / angka valid paling belakang dalam baris)
+    let selectedMatch = null
+
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const m = matches[i]
+      const rawMatchStr = m[0]
+      const numPart = m[1] || rawMatchStr
+
+      let cleanNum = numPart.replace(/Rp\.?\s*/gi, '').replace(/\./g, '').replace(',', '.')
+      let amount = 0
+
+      if (/k|rb|ribu/i.test(cleanNum)) {
+        amount = parseFloat(cleanNum.replace(/k|rb|ribu/gi, '')) * 1000
+      } else if (/jt|juta/i.test(cleanNum)) {
+        amount = parseFloat(cleanNum.replace(/jt|juta/gi, '')) * 1000000
+      } else {
+        amount = parseFloat(cleanNum)
+      }
+
+      // Nominal valid minimal 100 rupiah (menghindari angka keterangan seperti 2bln atau 2x)
+      if (!isNaN(amount) && amount >= 100) {
+        selectedMatch = { rawStr: rawMatchStr, amount: amount }
+        break
+      }
     }
 
-    if (isNaN(amount) || amount <= 0) continue
+    if (!selectedMatch) continue
 
-    // Bersihkan Deskripsi: Hapus nomor urut ganda & emoji
-    let desc = rawDesc
-      .replace(/[\d\.\)\s]+/g, ' ')
+    // 4. Bersihkan Deskripsi Transaksi
+    let desc = line.replace(selectedMatch.rawStr, '')
+
+    // Hapus nama kategori bawaan Telegram jika ada
+    desc = desc.replace(/(?:Lainnya|Belanja|Tagihan|Makanan|Pendidikan|Transportasi|Kesehatan|Rutin)\s*[\—\-–]?\s*/gi, '')
+
+    // Hapus nomor urut di awal (1., 2.) & emoji
+    desc = desc
+      .replace(/^[\s\d\.\)\-]+/g, '')
       .replace(/^[^\w\s\+\-\/]+/g, '')
-      .replace(/[^\w\s\+\-\/]+$/g, '')
+      .replace(/^[\s\d\.\)\-]+/g, '')
+      .replace(/^[\s\—\-–\.\,\:\;\+]+/g, '')
+      .replace(/[\s\—\-–\.\,\:\;]+$/g, '')
       .trim()
 
     if (!desc || desc.length < 2) {
@@ -58,7 +91,7 @@ function parseBatchText(text: string): ParsedItem[] {
 
     items.push({
       description: desc,
-      amount: amount,
+      amount: selectedMatch.amount,
       type: isIncome ? 'pemasukan' : 'pengeluaran',
       category: isIncome ? 'Pemasukan' : 'Umum'
     })
