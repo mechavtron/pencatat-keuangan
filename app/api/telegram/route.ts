@@ -1,138 +1,139 @@
-import { NextResponse } from "next/server";
-import { extractReceiptFromImage } from "@/lib/gemini";
-import { formatRupiah, parseExpenseText } from "@/lib/parse-expense";
-import { getSupabase } from "@/lib/supabase";
-import {
-  downloadTelegramFile,
-  largestPhoto,
-  sendTelegramMessage,
-  type TelegramUpdate,
-} from "@/lib/telegram";
+import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
-export const runtime = "nodejs";
-export const maxDuration = 60;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-const HELP_TEXT = [
-  "<b>Pencatat Keuangan</b>",
-  "",
-  "Kirim teks, contoh:",
-  "• <code>makan 25000 nasi padang</code>",
-  "• <code>bensin 20k</code>",
-  "",
-  "Atau kirim foto struk belanja. Bot akan membaca nominal, toko, dan kategorinya.",
-].join("\n");
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 
-export async function GET() {
-  return NextResponse.json({ ok: true, message: "Telegram webhook siap." });
+interface ParsedItem {
+  description: string
+  amount: number
+  type: 'pemasukan' | 'pengeluaran'
+  category: string
 }
 
-export async function POST(request: Request) {
-  let update: TelegramUpdate;
+async function sendTelegramMessage(chatId: number | string, text: string) {
+  if (!TELEGRAM_TOKEN) return
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'HTML',
+    }),
+  })
+}
 
-  try {
-    update = (await request.json()) as TelegramUpdate;
-  } catch {
-    return NextResponse.json({ ok: false, error: "Payload tidak valid" }, { status: 400 });
-  }
+async function parseWithGeminiAI(text: string): Promise<ParsedItem[]> {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
+  if (!apiKey) throw new Error('GEMINI_API_KEY belum dikonfigurasi.')
 
-  const message = update.message;
-  if (!message) {
-    return NextResponse.json({ ok: true, ignored: true });
-  }
+  const cleanInput = text.replace(/^[\w\s]+:\s*/i, '').trim()
 
-  const chatId = message.chat.id;
+  const systemPrompt = `Anda adalah sistem parser pencatat keuangan Telegram.
+Tugas Anda: Membaca teks mentah dari Telegram (baik 1 transaksi maupun banyak baris sekaligus) dan memecahnya menjadi daftar transaksi individual.
 
-  try {
-    if (message.photo?.length) {
-      await handlePhoto(chatId, message.photo, message.caption);
-    } else if (message.text) {
-      await handleText(chatId, message.text);
+Aturan Output (JSON Array murni):
+- "description": Nama transaksi murni tanpa nominal (contoh: "Bayar tour", "Kasih mamah + susu", "Spp hafsah").
+- "amount": Nominal angka murni dalam Rupiah (integer positif tanpa titik/koma/Rp, contoh: 1400000, 2300000). Konversi 'k'/'rb' ke ribuan, 'jt' ke jutaan.
+- "type": "pengeluaran" atau "pemasukan" (default "pengeluaran", kecuali ada kata seperti gaji, transfer masuk, bonus).
+- "category": Kategori singkat (misal: "Belanja", "Tagihan", "Pendidikan", "Makanan", "Transportasi", "Umum").
+
+Kembalikan HANYA array JSON murni tanpa markdown.`
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: `${systemPrompt}\n\nTeks Input:\n"""\n${cleanInput}\n"""` }],
+          },
+        ],
+        generationConfig: {
+          response_mime_type: 'application/json',
+          temperature: 0.1,
+        },
+      }),
     }
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "Terjadi kesalahan";
-    console.error("Telegram webhook error:", error);
-    try {
-      await sendTelegramMessage(chatId, `❌ Gagal menyimpan.\n${detail}`);
-    } catch {
-      // ignore secondary send failure
+  )
+
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(`Gemini Error: ${errText}`)
+  }
+
+  const resData = await response.json()
+  const rawJson = resData.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!rawJson) return []
+
+  const parsed = JSON.parse(rawJson)
+
+  if (Array.isArray(parsed)) {
+    return parsed
+      .map((item: any) => ({
+        description: String(item.description || 'Pengeluaran').trim(),
+        amount: Math.abs(Number(item.amount) || 0),
+        type: item.type === 'pemasukan' ? ('pemasukan' as const) : ('pengeluaran' as const),
+        category: String(item.category || 'Umum'),
+      }))
+      .filter((item) => item.amount > 0 && item.description.length > 0)
+  }
+
+  return []
+}
+
+export async function POST(req: Request) {
+  try {
+    const update = await req.json()
+    const message = update?.message
+    const chatId = message?.chat?.id
+    const text = message?.text || ''
+
+    if (!chatId || !text) {
+      return NextResponse.json({ ok: true })
     }
+
+    const parsedItems = await parseWithGeminiAI(text)
+
+    if (parsedItems.length === 0) {
+      await sendTelegramMessage(chatId, '❌ Gagal membaca format transaksi.')
+      return NextResponse.json({ ok: true })
+    }
+
+    const { data, error } = await supabase
+      .from('expenses')
+      .insert(parsedItems)
+      .select()
+
+    if (error) {
+      await sendTelegramMessage(chatId, `❌ Gagal menyimpan: ${error.message}`)
+      return NextResponse.json({ ok: true })
+    }
+
+    let replyText = `✅ <b>Berhasil mencatat ${data.length} transaksi!</b>\n\n`
+    let totalNominal = 0
+
+    data.forEach((item: any, idx: number) => {
+      totalNominal += item.amount
+      const formattedRp = new Intl.NumberFormat('id-ID').format(item.amount)
+      replyText += `${idx + 1}. ${item.description} — <b>Rp ${formattedRp}</b>\n`
+    })
+
+    const totalRp = new Intl.NumberFormat('id-ID').format(totalNominal)
+    replyText += `\n<b>Total: Rp ${totalRp}</b>`
+
+    await sendTelegramMessage(chatId, replyText)
+    return NextResponse.json({ ok: true })
+
+  } catch (err: unknown) {
+    console.error('Telegram webhook error:', err)
+    return NextResponse.json({ ok: true })
   }
-
-  return NextResponse.json({ ok: true });
-}
-
-async function handleText(chatId: number, text: string) {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("/start") || trimmed.startsWith("/help")) {
-    await sendTelegramMessage(chatId, HELP_TEXT);
-    return;
-  }
-
-  const parsed = parseExpenseText(trimmed);
-  if (!parsed) {
-    await sendTelegramMessage(
-      chatId,
-      "Format tidak dikenali. Contoh: <code>makan 25000 nasi padang</code> atau <code>bensin 20k</code>.",
-    );
-    return;
-  }
-
-  const { error } = await getSupabase().from("expenses").insert({
-    amount: parsed.amount,
-    category: parsed.category,
-    description: parsed.description,
-  });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  await sendTelegramMessage(
-    chatId,
-    [
-      "✅ <b>Tercatat</b>",
-      `Kategori: ${parsed.category}`,
-      `Nominal: ${formatRupiah(parsed.amount)}`,
-      `Keterangan: ${parsed.description}`,
-    ].join("\n"),
-  );
-}
-
-async function handlePhoto(
-  chatId: number,
-  photos: NonNullable<TelegramUpdate["message"]>["photo"],
-  caption?: string,
-) {
-  if (!photos?.length) return;
-
-  const photo = largestPhoto(photos);
-  const file = await downloadTelegramFile(photo.file_id);
-  const receipt = await extractReceiptFromImage(file.bytes, file.mimeType);
-
-  const description = caption?.trim() || receipt.description;
-  const createdAt = receipt.date ? `${receipt.date}T12:00:00+07:00` : undefined;
-
-  const { error } = await getSupabase().from("expenses").insert({
-    amount: receipt.total_amount,
-    category: receipt.category,
-    description,
-    store_name: receipt.store_name,
-    image_url: file.filePath,
-    ...(createdAt ? { created_at: createdAt } : {}),
-  });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  await sendTelegramMessage(
-    chatId,
-    [
-      "✅ <b>Struk tercatat</b>",
-      `Toko: ${receipt.store_name}`,
-      `Kategori: ${receipt.category}`,
-      `Nominal: ${formatRupiah(receipt.total_amount)}`,
-      `Keterangan: ${description}`,
-    ].join("\n"),
-  );
 }
