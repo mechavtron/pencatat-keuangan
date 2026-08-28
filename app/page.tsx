@@ -1,219 +1,228 @@
-import type { ReactNode } from "react";
-import { formatRupiah } from "@/lib/parse-expense";
-import { getSupabase } from "@/lib/supabase";
-import type { Expense } from "@/lib/types";
-import {
-  Camera,
-  Receipt,
-  Send,
-  TrendingDown,
-  Wallet,
-} from "lucide-react";
+'use client'
 
-export const dynamic = "force-dynamic";
+import { useEffect, useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
 
-function jakartaMonthRange() {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Jakarta",
-    year: "numeric",
-    month: "2-digit",
-  }).formatToParts(now);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-  const year = parts.find((part) => part.type === "year")?.value ?? "2026";
-  const month = parts.find((part) => part.type === "month")?.value ?? "01";
-  const start = `${year}-${month}-01T00:00:00+07:00`;
-  const nextMonth = Number(month) === 12 ? 1 : Number(month) + 1;
-  const nextYear = Number(month) === 12 ? Number(year) + 1 : Number(year);
-  const end = `${nextYear}-${String(nextMonth).padStart(2, "0")}-01T00:00:00+07:00`;
-
-  return { start, end, label: `${monthName(Number(month))} ${year}` };
+interface Expense {
+  id: string
+  created_at: string
+  amount: number
+  category: string
+  description: string
+  type: 'pemasukan' | 'pengeluaran'
 }
 
-function monthName(month: number): string {
-  return [
-    "Januari",
-    "Februari",
-    "Maret",
-    "April",
-    "Mei",
-    "Juni",
-    "Juli",
-    "Agustus",
-    "September",
-    "Oktober",
-    "November",
-    "Desember",
-  ][month - 1];
-}
+export default function Home() {
+  const [expenses, setExpenses] = useState<Expense[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth())
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear())
+  const [usePaydayCycle, setUsePaydayCycle] = useState<boolean>(true)
 
-function formatDate(iso: string): string {
-  return new Intl.DateTimeFormat("id-ID", {
-    timeZone: "Asia/Jakarta",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(iso));
-}
+  const months = [
+    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+  ]
 
-const CATEGORY_STYLE: Record<string, string> = {
-  Makanan: "bg-orange-100 text-orange-800",
-  Transport: "bg-sky-100 text-sky-800",
-  Belanja: "bg-violet-100 text-violet-800",
-  Tagihan: "bg-amber-100 text-amber-800",
-  Kesehatan: "bg-rose-100 text-rose-800",
-  Hiburan: "bg-pink-100 text-pink-800",
-  Pendidikan: "bg-indigo-100 text-indigo-800",
-  Lainnya: "bg-stone-100 text-stone-700",
-};
+  const fetchExpenses = async () => {
+    setLoading(true)
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('*')
+      .order('created_at', { ascending: false })
 
-export default async function HomePage() {
-  let expenses: Expense[] = [];
-  let monthlyTotal = 0;
-  let loadError: string | null = null;
-  const { start, end, label } = jakartaMonthRange();
-
-  try {
-    const supabase = getSupabase();
-    const [{ data: recent, error: recentError }, { data: monthRows, error: monthError }] =
-      await Promise.all([
-        supabase
-          .from("expenses")
-          .select("id, created_at, amount, category, description, store_name, image_url")
-          .order("created_at", { ascending: false })
-          .limit(30),
-        supabase.from("expenses").select("amount").gte("created_at", start).lt("created_at", end),
-      ]);
-
-    if (recentError || monthError) {
-      loadError = recentError?.message ?? monthError?.message ?? "Gagal memuat data";
-    } else {
-      expenses = (recent ?? []) as Expense[];
-      monthlyTotal = (monthRows ?? []).reduce(
-        (sum, row) => sum + Number(row.amount ?? 0),
-        0,
-      );
+    if (!error && data) {
+      setExpenses(data as Expense[])
     }
-  } catch (error) {
-    loadError =
-      error instanceof Error ? error.message : "Supabase belum dikonfigurasi";
+    setLoading(false)
   }
 
+  useEffect(() => {
+    fetchExpenses()
+  }, [])
+
+  const handleDelete = async (id: string) => {
+    if (confirm('Yakin ingin menghapus transaksi ini?')) {
+      const { error } = await supabase.from('expenses').delete().eq('id', id)
+      if (!error) {
+        setExpenses((prev) => prev.filter((item) => item.id !== id))
+      } else {
+        alert('Gagal menghapus transaksi.')
+      }
+    }
+  }
+
+  // Filter transaksi berdasarkan Bulan Kalender vs Siklus Gaji (25 ke atas masuk bulan depan)
+  const filteredExpenses = expenses.filter((item) => {
+    const date = new Date(item.created_at)
+    const day = date.getDate()
+    let m = date.getMonth()
+    let y = date.getFullYear()
+
+    if (usePaydayCycle) {
+      if (day >= 25) {
+        m = (m + 1) % 12
+        if (m === 0) y += 1
+      }
+    }
+
+    return m === selectedMonth && y === selectedYear
+  })
+
+  const totalPemasukan = filteredExpenses
+    .filter((e) => e.type === 'pemasukan')
+    .reduce((acc, curr) => acc + curr.amount, 0)
+
+  const totalPengeluaran = filteredExpenses
+    .filter((e) => e.type !== 'pemasukan')
+    .reduce((acc, curr) => acc + curr.amount, 0)
+
+  const sisaSaldo = totalPemasukan - totalPengeluaran
+
   return (
-    <main className="mx-auto min-h-dvh w-full max-w-lg px-4 pb-10 pt-6 sm:max-w-2xl">
-      <header className="mb-6 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-emerald-700">Pencatat Keuangan</p>
-          <h1 className="text-2xl font-semibold tracking-tight text-stone-900">
-            Ringkasan pengeluaran
-          </h1>
-          <p className="mt-1 text-sm text-stone-500">{label}</p>
-        </div>
-        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-700 text-white shadow-sm">
-          <Wallet className="h-5 w-5" />
-        </div>
-      </header>
-
-      <section className="rounded-3xl bg-gradient-to-br from-emerald-800 to-green-700 p-5 text-white shadow-lg shadow-emerald-900/10">
-        <div className="flex items-center gap-2 text-emerald-100">
-          <TrendingDown className="h-4 w-4" />
-          <span className="text-sm">Total bulan ini</span>
-        </div>
-        <p className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
-          {formatRupiah(monthlyTotal)}
-        </p>
-        <p className="mt-2 text-sm text-emerald-100/90">
-          {expenses.length > 0
-            ? `${expenses.length} transaksi terbaru ditampilkan`
-            : "Belum ada transaksi"}
-        </p>
-      </section>
-
-      <section className="mt-5 grid grid-cols-3 gap-2 text-center">
-        <HintCard icon={<Send className="h-4 w-4" />} title="Teks" caption="makan 25k" />
-        <HintCard icon={<Camera className="h-4 w-4" />} title="Struk" caption="foto OCR" />
-        <HintCard icon={<Receipt className="h-4 w-4" />} title="Bot" caption="Telegram" />
-      </section>
-
-      {loadError ? (
-        <p className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          {loadError}. Isi <code className="font-mono">.env.local</code> lalu jalankan{" "}
-          <code className="font-mono">schema.sql</code> di Supabase.
-        </p>
-      ) : null}
-
-      <section className="mt-6">
-        <div className="mb-3 flex items-end justify-between">
-          <h2 className="text-base font-semibold text-stone-900">Riwayat transaksi</h2>
-          <span className="text-xs text-stone-500">Terbaru</span>
-        </div>
-
-        {expenses.length === 0 && !loadError ? (
-          <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-10 text-center">
-            <p className="font-medium text-stone-800">Belum ada pengeluaran</p>
-            <p className="mt-1 text-sm text-stone-500">
-              Kirim pesan ke bot Telegram atau foto struk untuk mulai mencatat.
-            </p>
-          </div>
-        ) : (
-          <ul className="space-y-2">
-            {expenses.map((expense) => (
-              <li
-                key={expense.id}
-                className="rounded-2xl border border-stone-200/80 bg-white px-4 py-3 shadow-sm"
+    <main className="min-h-screen bg-[#F4F7F4] p-4 md:p-8 font-sans">
+      <div className="max-w-xl mx-auto space-y-6">
+        {/* Header & Filter Bulan */}
+        <div className="flex flex-col gap-2">
+          <span className="text-xs font-semibold tracking-wider text-emerald-700 uppercase">
+            Pencatat Keuangan
+          </span>
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold text-gray-900">Ringkasan Keuangan</h1>
+            <div className="flex gap-2">
+              <select
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm focus:outline-none"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-stone-900">
-                      {expense.store_name || expense.description || "Pengeluaran"}
-                    </p>
-                    <p className="mt-0.5 truncate text-sm text-stone-500">
-                      {expense.store_name && expense.description
-                        ? expense.description
-                        : formatDate(expense.created_at)}
-                    </p>
-                  </div>
-                  <p className="shrink-0 text-right font-semibold text-stone-900">
-                    {formatRupiah(Number(expense.amount))}
-                  </p>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                      CATEGORY_STYLE[expense.category] ?? CATEGORY_STYLE.Lainnya
-                    }`}
-                  >
-                    {expense.category}
-                  </span>
-                  <time className="text-xs text-stone-400">
-                    {formatDate(expense.created_at)}
-                  </time>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </main>
-  );
-}
+                {months.map((m, idx) => (
+                  <option key={idx} value={idx}>{m}</option>
+                ))}
+              </select>
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm focus:outline-none"
+              >
+                <option value={2025}>2025</option>
+                <option value={2026}>2026</option>
+                <option value={2027}>2027</option>
+              </select>
+            </div>
+          </div>
+          
+          {/* Toggle Siklus Gaji */}
+          <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-gray-100 mt-2">
+            <span className="text-xs text-gray-600 font-medium">
+              Siklus Gaji Akhir Bulan <span className="text-gray-400">(Tgl 25 - 24)</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={usePaydayCycle}
+              onChange={(e) => setUsePaydayCycle(e.target.checked)}
+              className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+            />
+          </div>
+        </div>
 
-function HintCard({
-  icon,
-  title,
-  caption,
-}: {
-  icon: ReactNode;
-  title: string;
-  caption: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-stone-200 bg-white px-2 py-3">
-      <div className="mx-auto mb-1 flex h-8 w-8 items-center justify-center rounded-full bg-emerald-50 text-emerald-700">
-        {icon}
+        {/* Card Utama Ringkasan */}
+        <div className="bg-emerald-800 text-white rounded-2xl p-6 shadow-lg space-y-4">
+          <div>
+            <span className="text-xs text-emerald-200 font-medium">Sisa Saldo Periode Ini</span>
+            <div className="text-3xl font-bold mt-1">
+              Rp {sisaSaldo.toLocaleString('id-ID')}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4 border-t border-emerald-700/60 pt-4">
+            <div>
+              <span className="text-xs text-emerald-200">Total Pemasukan</span>
+              <div className="text-lg font-semibold text-emerald-300">
+                + Rp {totalPemasukan.toLocaleString('id-ID')}
+              </div>
+            </div>
+            <div>
+              <span className="text-xs text-emerald-200">Total Pengeluaran</span>
+              <div className="text-lg font-semibold text-emerald-100">
+                - Rp {totalPengeluaran.toLocaleString('id-ID')}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Daftar Transaksi */}
+        <div className="space-y-3">
+          <div className="flex justify-between items-center">
+            <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide">
+              Riwayat Transaksi ({filteredExpenses.length})
+            </h2>
+            <button
+              onClick={fetchExpenses}
+              className="text-xs text-emerald-700 hover:underline"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="bg-white p-6 rounded-2xl text-center text-sm text-gray-400">
+              Memuat data...
+            </div>
+          ) : filteredExpenses.length === 0 ? (
+            <div className="bg-white p-6 rounded-2xl text-center text-sm text-gray-400 border border-dashed border-gray-200">
+              Belum ada transaksi di periode {months[selectedMonth]} {selectedYear}.
+            </div>
+          ) : (
+            filteredExpenses.map((item) => {
+              const isIncome = item.type === 'pemasukan'
+              const formattedDate = new Date(item.created_at).toLocaleDateString('id-ID', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+              })
+
+              return (
+                <div
+                  key={item.id}
+                  className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow"
+                >
+                  <div className="space-y-1">
+                    <div className="font-semibold text-gray-800 text-sm">
+                      {item.description}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
+                        {item.category || 'Umum'}
+                      </span>
+                      <span className="text-xs text-gray-400">{formattedDate}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`font-bold text-sm ${
+                        isIncome ? 'text-emerald-600' : 'text-gray-900'
+                      }`}
+                    >
+                      {isIncome ? '+' : ''} Rp {item.amount.toLocaleString('id-ID')}
+                    </span>
+                    <button
+                      onClick={() => handleDelete(item.id)}
+                      className="text-gray-300 hover:text-red-500 transition-colors p-1"
+                      title="Hapus Transaksi"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
       </div>
-      <p className="text-xs font-semibold text-stone-800">{title}</p>
-      <p className="text-[11px] text-stone-500">{caption}</p>
-    </div>
-  );
+    </main>
+  )
 }
