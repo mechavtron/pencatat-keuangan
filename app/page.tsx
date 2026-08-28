@@ -16,6 +16,60 @@ interface Expense {
   type: 'pemasukan' | 'pengeluaran'
 }
 
+// Daftar Tanggal Libur Nasional Indonesia (dapat ditambahkan sesuai kebutuhan)
+const NATIONAL_HOLIDAYS: string[] = [
+  '2025-01-01', '2025-01-29', '2025-03-29', '2025-03-31', '2025-04-18', '2025-05-01', '2025-05-12', '2025-05-29', '2025-06-01', '2025-06-06', '2025-06-27', '2025-08-17', '2025-09-05', '2025-12-25',
+  '2026-01-01', '2026-01-16', '2026-02-17', '2026-03-19', '2026-03-20', '2026-03-21', '2026-04-03', '2026-05-01', '2026-05-14', '2026-05-27', '2026-06-01', '2026-06-16', '2026-08-17', '2026-08-25', '2026-12-25'
+]
+
+// Fungsi mengecek apakah suatu tanggal jatuh pada Sabtu, Minggu, atau Hari Libur Nasional
+function isWeekendOrHoliday(date: Date): boolean {
+  const dayOfWeek = date.getDay()
+  if (dayOfWeek === 0 || dayOfWeek === 6) return true // 0: Minggu, 6: Sabtu
+
+  const yyyy = date.getFullYear()
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  const dateStr = `${yyyy}-${mm}-${dd}`
+
+  return NATIONAL_HOLIDAYS.includes(dateStr)
+}
+
+// Fungsi menghitung Tanggal Gajian untuk bulan & tahun tertentu
+function getPaydayDate(year: number, month: number): Date {
+  const lastDay = new Date(year, month + 1, 0).getDate()
+  let payday = new Date(year, month, lastDay - 1)
+
+  // Mundurkan jika jatuh pada hari libur atau akhir pekan
+  while (isWeekendOrHoliday(payday)) {
+    payday.setDate(payday.getDate() - 1)
+  }
+  return payday
+}
+
+// Fungsi mengecek apakah transaksi masuk ke dalam Siklus Gajian bulan tertentu
+function isInPaydayCycle(transDate: Date, targetYear: number, targetMonth: number): boolean {
+  let prevYear = targetYear
+  let prevMonth = targetMonth - 1
+  if (prevMonth < 0) {
+    prevMonth = 11
+    prevYear -= 1
+  }
+
+  // Awal Siklus: Tanggal Gajian Bulan Sebelumnya
+  const cycleStart = getPaydayDate(prevYear, prevMonth)
+  cycleStart.setHours(0, 0, 0, 0)
+
+  // Akhir Siklus: Tanggal Gajian Bulan Ini (Hari gajian bulan ini sudah masuk ke siklus bulan depan)
+  const nextPayday = getPaydayDate(targetYear, targetMonth)
+  nextPayday.setHours(0, 0, 0, 0)
+
+  const trans = new Date(transDate)
+  trans.setHours(0, 0, 0, 0)
+
+  return trans >= cycleStart && trans < nextPayday
+}
+
 export default function Home() {
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [loading, setLoading] = useState(true)
@@ -56,21 +110,19 @@ export default function Home() {
     }
   }
 
-  // Filter transaksi berdasarkan Bulan Kalender vs Siklus Gaji (25 ke atas masuk bulan depan)
+  // Tanggal gajian riil untuk bulan yang sedang dipilih
+  const currentPayday = getPaydayDate(selectedYear, selectedMonth)
+  const formattedPaydayStr = `${currentPayday.getDate()} ${months[currentPayday.getMonth()]}`
+
+  // Filter Transaksi berdasarkan Kalender Biasa vs Siklus Gajian Otomatis
   const filteredExpenses = expenses.filter((item) => {
     const date = new Date(item.created_at)
-    const day = date.getDate()
-    let m = date.getMonth()
-    let y = date.getFullYear()
 
     if (usePaydayCycle) {
-      if (day >= 25) {
-        m = (m + 1) % 12
-        if (m === 0) y += 1
-      }
+      return isInPaydayCycle(date, selectedYear, selectedMonth)
+    } else {
+      return date.getMonth() === selectedMonth && date.getFullYear() === selectedYear
     }
-
-    return m === selectedMonth && y === selectedYear
   })
 
   const totalPemasukan = filteredExpenses
@@ -115,11 +167,16 @@ export default function Home() {
             </div>
           </div>
           
-          {/* Toggle Siklus Gaji */}
-          <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-gray-100 mt-2">
-            <span className="text-xs text-gray-600 font-medium">
-              Siklus Gaji Akhir Bulan <span className="text-gray-400">(Tgl 25 - 24)</span>
-            </span>
+          {/* Opsi Mode Perhitungan Gajian */}
+          <div className="bg-white p-3 rounded-xl border border-gray-100 flex items-center justify-between mt-1">
+            <div className="flex flex-col">
+              <span className="text-xs font-semibold text-gray-800">
+                Mode Siklus Gajian Otomatis
+              </span>
+              <span className="text-[11px] text-gray-500">
+                Gajian periode ini: <strong className="text-emerald-700">{formattedPaydayStr}</strong>
+              </span>
+            </div>
             <input
               type="checkbox"
               checked={usePaydayCycle}
@@ -132,7 +189,9 @@ export default function Home() {
         {/* Card Utama Ringkasan */}
         <div className="bg-emerald-800 text-white rounded-2xl p-6 shadow-lg space-y-4">
           <div>
-            <span className="text-xs text-emerald-200 font-medium">Sisa Saldo Periode Ini</span>
+            <span className="text-xs text-emerald-200 font-medium">
+              Sisa Saldo Periode {months[selectedMonth]}
+            </span>
             <div className="text-3xl font-bold mt-1">
               Rp {sisaSaldo.toLocaleString('id-ID')}
             </div>
