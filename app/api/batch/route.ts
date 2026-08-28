@@ -23,8 +23,7 @@ function parseBatchText(text: string): ParsedItem[] {
     .replace(/✅?\s*Berhasil dicatat!\s*✨?/gi, '')
     .replace(/✨\s*\.\s*✨/g, '')
 
-  // 3. Gabungkan baris kategori/nominal dengan judulnya
-  // (Jika baris baru TIDAK diawali nomor urut transaksi seperti "1.", "2.", maka gabungkan ke baris atasnya)
+  // 3. Gabungkan baris kategori/nominal dengan judulnya (multi-line Telegram)
   cleaned = cleaned.replace(/\n(?!\s*\d{1,2}[\.\)])/g, ' ')
 
   // 4. Pecah per item transaksi
@@ -55,18 +54,23 @@ function parseBatchText(text: string): ParsedItem[] {
 
     if (isNaN(amount) || amount <= 0) continue
 
-    // 6. Pembersihan Deskripsi:
-    // Hapus nominal dari teks
+    // 6. Pembersihan Deskripsi (Kompatibel Next.js Compiler):
     let desc = line.replace(rawAmountStr, '')
 
-    // Hapus kata kategori bawaan Telegram (Lainnya —, Belanja —, Tagihan —, dll)
+    // Hapus kata kategori bawaan Telegram
     desc = desc.replace(/(?:Lainnya|Belanja|Tagihan|Makanan|Pendidikan|Transportasi|Kesehatan|Rutin)\s*[\—\-–]?\s*/gi, '')
 
-    // Hapus nomor ganda, emoji (✨, 🛍️, 🏠, dll) dan simbol di awal
-    desc = desc.replace(/^[\s\d\.\)\p{Extended_Pictographic}\•\-–—\:\;]+/gu, '')
+    // Hapus penomoran ganda di depan (contoh: "1. 2.")
+    desc = desc.replace(/^[\s\d\.\)\-]+/g, '')
 
-    // Hapus sisa tanda baca di akhir
-    desc = desc.replace(/[\s\—\-–\.\,\:\;]+$/g, '').trim()
+    // Hapus karakter emoji & simbol khusus di depan
+    desc = desc.replace(/^[^\w\s\+\-\/]+/gi, '')
+    
+    // Hapus sisa penomoran urut ganda setelah emoji terhapus
+    desc = desc.replace(/^[\s\d\.\)\-]+/g, '')
+
+    // Hapus sisa spasi & tanda baca pemisah
+    desc = desc.replace(/^[\s\—\-–\.\,\:\;\+]+/g, '').replace(/[\s\—\-–\.\,\:\;]+$/g, '').trim()
 
     if (!desc) desc = 'Pengeluaran'
 
