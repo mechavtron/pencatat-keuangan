@@ -15,21 +15,26 @@ interface ParsedItem {
 function parseBatchText(text: string): ParsedItem[] {
   const items: ParsedItem[] = []
 
-  // 1. Bersihkan pembuka/salam bot
-  let cleanText = text
-    .replace(/Berhasil dicatat!/gi, '')
+  // 1. Normalisasi karakter spasi khusus Telegram (\u00A0) ke spasi biasa
+  let cleaned = text.replace(/\u00A0/g, ' ')
+
+  // 2. Hapus salam/header bot Telegram
+  cleaned = cleaned
+    .replace(/✅?\s*Berhasil dicatat!\s*✨?/gi, '')
     .replace(/✨\s*\.\s*✨/g, '')
 
-  // 2. Potong otomatis teks 1 baris panjang menjadi per baris berdasarkan nomor urut (1., 2., 10., dst.)
-  cleanText = cleanText.replace(/(\s\d{1,2}[\.\)])/g, '\n$1')
+  // 3. Gabungkan baris kategori/nominal dengan judulnya
+  // (Jika baris baru TIDAK diawali nomor urut transaksi seperti "1.", "2.", maka gabungkan ke baris atasnya)
+  cleaned = cleaned.replace(/\n(?!\s*\d{1,2}[\.\)])/g, ' ')
 
-  const lines = cleanText.split('\n')
+  // 4. Pecah per item transaksi
+  const lines = cleaned.split('\n')
 
   for (let line of lines) {
     line = line.trim()
     if (!line) continue
 
-    // 3. Cari nominal angka (contoh: Rp 1.400.000, Rp 200.000, 250k, 1.5jt)
+    // 5. Ekstrak Nominal Angka (contoh: Rp 1.400.000, Rp 200.000, 250k, 1.5jt)
     const amountMatch = line.match(/(?:Rp\.?\s*)(\d+(?:[\.\,]\d+)*(?:\s*(?:k|rb|ribu|jt|juta))?)|(\b\d+(?:[\.\,]\d+)*(?:\s*(?:k|rb|ribu|jt|juta))\b)/i)
     
     if (!amountMatch) continue
@@ -50,18 +55,18 @@ function parseBatchText(text: string): ParsedItem[] {
 
     if (isNaN(amount) || amount <= 0) continue
 
-    // 4. Pembersihan Deskripsi:
+    // 6. Pembersihan Deskripsi:
+    // Hapus nominal dari teks
     let desc = line.replace(rawAmountStr, '')
 
-    // Hapus penomoran berulang, emoji, dan simbol di awal
-    desc = desc.replace(/^[\s\d\.\)\✨\🛍️\🏠\•\-–—\:\;]+/g, '')
-    desc = desc.replace(/^[\s\d\.\)\✨\🛍️\🏠\•\-–—\:\;]+/g, '')
-
-    // Hapus kata kategori bawaan (Lainnya, Belanja, Tagihan, dll)
+    // Hapus kata kategori bawaan Telegram (Lainnya —, Belanja —, Tagihan —, dll)
     desc = desc.replace(/(?:Lainnya|Belanja|Tagihan|Makanan|Pendidikan|Transportasi|Kesehatan|Rutin)\s*[\—\-–]?\s*/gi, '')
 
-    // Trim sisa karakter pemisah
-    desc = desc.replace(/^[\s\—\-–\.\,\:\;]+/, '').replace(/[\s\—\-–\.\,\:\;]+$/, '').trim()
+    // Hapus nomor ganda, emoji (✨, 🛍️, 🏠, dll) dan simbol di awal
+    desc = desc.replace(/^[\s\d\.\)\p{Extended_Pictographic}\•\-–—\:\;]+/gu, '')
+
+    // Hapus sisa tanda baca di akhir
+    desc = desc.replace(/[\s\—\-–\.\,\:\;]+$/g, '').trim()
 
     if (!desc) desc = 'Pengeluaran'
 
