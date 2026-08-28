@@ -16,38 +16,29 @@ interface Expense {
   type: 'pemasukan' | 'pengeluaran'
 }
 
-// Daftar Tanggal Libur Nasional Indonesia (dapat ditambahkan sesuai kebutuhan)
 const NATIONAL_HOLIDAYS: string[] = [
   '2025-01-01', '2025-01-29', '2025-03-29', '2025-03-31', '2025-04-18', '2025-05-01', '2025-05-12', '2025-05-29', '2025-06-01', '2025-06-06', '2025-06-27', '2025-08-17', '2025-09-05', '2025-12-25',
   '2026-01-01', '2026-01-16', '2026-02-17', '2026-03-19', '2026-03-20', '2026-03-21', '2026-04-03', '2026-05-01', '2026-05-14', '2026-05-27', '2026-06-01', '2026-06-16', '2026-08-17', '2026-08-25', '2026-12-25'
 ]
 
-// Fungsi mengecek apakah suatu tanggal jatuh pada Sabtu, Minggu, atau Hari Libur Nasional
 function isWeekendOrHoliday(date: Date): boolean {
   const dayOfWeek = date.getDay()
-  if (dayOfWeek === 0 || dayOfWeek === 6) return true // 0: Minggu, 6: Sabtu
-
+  if (dayOfWeek === 0 || dayOfWeek === 6) return true
   const yyyy = date.getFullYear()
   const mm = String(date.getMonth() + 1).padStart(2, '0')
   const dd = String(date.getDate()).padStart(2, '0')
-  const dateStr = `${yyyy}-${mm}-${dd}`
-
-  return NATIONAL_HOLIDAYS.includes(dateStr)
+  return NATIONAL_HOLIDAYS.includes(`${yyyy}-${mm}-${dd}`)
 }
 
-// Fungsi menghitung Tanggal Gajian untuk bulan & tahun tertentu
 function getPaydayDate(year: number, month: number): Date {
   const lastDay = new Date(year, month + 1, 0).getDate()
   let payday = new Date(year, month, lastDay - 1)
-
-  // Mundurkan jika jatuh pada hari libur atau akhir pekan
   while (isWeekendOrHoliday(payday)) {
     payday.setDate(payday.getDate() - 1)
   }
   return payday
 }
 
-// Fungsi mengecek apakah transaksi masuk ke dalam Siklus Gajian bulan tertentu
 function isInPaydayCycle(transDate: Date, targetYear: number, targetMonth: number): boolean {
   let prevYear = targetYear
   let prevMonth = targetMonth - 1
@@ -56,11 +47,9 @@ function isInPaydayCycle(transDate: Date, targetYear: number, targetMonth: numbe
     prevYear -= 1
   }
 
-  // Awal Siklus: Tanggal Gajian Bulan Sebelumnya
   const cycleStart = getPaydayDate(prevYear, prevMonth)
   cycleStart.setHours(0, 0, 0, 0)
 
-  // Akhir Siklus: Tanggal Gajian Bulan Ini (Hari gajian bulan ini sudah masuk ke siklus bulan depan)
   const nextPayday = getPaydayDate(targetYear, targetMonth)
   nextPayday.setHours(0, 0, 0, 0)
 
@@ -76,6 +65,11 @@ export default function Home() {
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth())
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear())
   const [usePaydayCycle, setUsePaydayCycle] = useState<boolean>(true)
+
+  // State Modal Batch Input
+  const [showBatchModal, setShowBatchModal] = useState(false)
+  const [batchText, setBatchText] = useState('')
+  const [submittingBatch, setSubmittingBatch] = useState(false)
 
   const months = [
     'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
@@ -110,14 +104,38 @@ export default function Home() {
     }
   }
 
-  // Tanggal gajian riil untuk bulan yang sedang dipilih
+  const handleProcessBatch = async () => {
+    if (!batchText.trim()) return
+    setSubmittingBatch(true)
+
+    try {
+      const res = await fetch('/api/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: batchText })
+      })
+
+      const result = await res.json()
+      if (res.ok) {
+        alert(`Berhasil menambahkan ${result.count} transaksi!`)
+        setBatchText('')
+        setShowBatchModal(false)
+        fetchExpenses()
+      } else {
+        alert(result.error || 'Gagal memproses batch.')
+      }
+    } catch (err) {
+      alert('Terjadi kesalahan koneksi.')
+    } finally {
+      setSubmittingBatch(false)
+    }
+  }
+
   const currentPayday = getPaydayDate(selectedYear, selectedMonth)
   const formattedPaydayStr = `${currentPayday.getDate()} ${months[currentPayday.getMonth()]}`
 
-  // Filter Transaksi berdasarkan Kalender Biasa vs Siklus Gajian Otomatis
   const filteredExpenses = expenses.filter((item) => {
     const date = new Date(item.created_at)
-
     if (usePaydayCycle) {
       return isInPaydayCycle(date, selectedYear, selectedMonth)
     } else {
@@ -138,7 +156,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#F4F7F4] p-4 md:p-8 font-sans">
       <div className="max-w-xl mx-auto space-y-6">
-        {/* Header & Filter Bulan */}
+        {/* Header & Filter */}
         <div className="flex flex-col gap-2">
           <span className="text-xs font-semibold tracking-wider text-emerald-700 uppercase">
             Pencatat Keuangan
@@ -167,26 +185,35 @@ export default function Home() {
             </div>
           </div>
           
-          {/* Opsi Mode Perhitungan Gajian */}
-          <div className="bg-white p-3 rounded-xl border border-gray-100 flex items-center justify-between mt-1">
-            <div className="flex flex-col">
-              <span className="text-xs font-semibold text-gray-800">
-                Mode Siklus Gajian Otomatis
-              </span>
-              <span className="text-[11px] text-gray-500">
-                Gajian periode ini: <strong className="text-emerald-700">{formattedPaydayStr}</strong>
-              </span>
+          {/* Mode Siklus & Tombol Batch */}
+          <div className="flex flex-col gap-2 mt-1">
+            <div className="bg-white p-3 rounded-xl border border-gray-100 flex items-center justify-between">
+              <div className="flex flex-col">
+                <span className="text-xs font-semibold text-gray-800">
+                  Mode Siklus Gajian Otomatis
+                </span>
+                <span className="text-[11px] text-gray-500">
+                  Gajian periode ini: <strong className="text-emerald-700">{formattedPaydayStr}</strong>
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={usePaydayCycle}
+                onChange={(e) => setUsePaydayCycle(e.target.checked)}
+                className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+              />
             </div>
-            <input
-              type="checkbox"
-              checked={usePaydayCycle}
-              onChange={(e) => setUsePaydayCycle(e.target.checked)}
-              className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
-            />
+
+            <button
+              onClick={() => setShowBatchModal(true)}
+              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2"
+            >
+              <span>⚡</span> Input Banyak Transaksi (Batch)
+            </button>
           </div>
         </div>
 
-        {/* Card Utama Ringkasan */}
+        {/* Ringkasan Saldo */}
         <div className="bg-emerald-800 text-white rounded-2xl p-6 shadow-lg space-y-4">
           <div>
             <span className="text-xs text-emerald-200 font-medium">
@@ -282,6 +309,51 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {/* MODAL BATCH INPUT */}
+      {showBatchModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full space-y-4 shadow-xl">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="font-bold text-gray-800 text-lg">Input Banyak Transaksi sekaligus</h3>
+              <button
+                onClick={() => setShowBatchModal(false)}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500">
+              Tempelkan teks berisi daftar transaksi. Sistem hanya akan mengekstrak <strong>deskripsi</strong> &amp; <strong>nominal</strong> (kata/emoji lainnya diabaikan).
+            </p>
+
+            <textarea
+              rows={8}
+              value={batchText}
+              onChange={(e) => setBatchText(e.target.value)}
+              placeholder="Contoh:&#10;1. Bayar tour Lainnya — Rp 1.400.000&#10;2. ✨ Kasih mamah + susu Rp 2.300.000&#10;3. 🛍️ Bayar baju elok — Rp 200.000"
+              className="w-full p-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+            />
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowBatchModal(false)}
+                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-xl font-medium"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleProcessBatch}
+                disabled={submittingBatch}
+                className="px-5 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium disabled:opacity-50"
+              >
+                {submittingBatch ? 'Memproses...' : 'Proses & Simpan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
