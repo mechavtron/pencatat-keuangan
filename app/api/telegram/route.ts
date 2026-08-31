@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN
@@ -16,30 +16,35 @@ interface ParsedItem {
 
 async function sendTelegramMessage(chatId: number | string, text: string) {
   if (!TELEGRAM_TOKEN) return
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: text,
-      parse_mode: 'HTML',
-    }),
-  })
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        parse_mode: 'HTML',
+      }),
+    })
+  } catch (err) {
+    console.error('Gagal kirim pesan ke Telegram:', err)
+  }
 }
 
 async function parseWithGeminiAI(text: string): Promise<ParsedItem[]> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
-  if (!apiKey) throw new Error('GEMINI_API_KEY belum dikonfigurasi.')
+  if (!apiKey) throw new Error('GEMINI_API_KEY belum terpasang di Vercel.')
 
-  const cleanInput = text.replace(/^[\w\s]+:\s*/i, '').trim()
+  // Bersihkan teks dari awalan berulang seperti "jae:"
+  const cleanInput = text.replace(/^(jae:\s*)+/gi, '').trim()
 
   const systemPrompt = `Anda adalah sistem parser pencatat keuangan Telegram.
-Tugas Anda: Membaca teks mentah dari Telegram (baik 1 transaksi maupun banyak baris sekaligus) dan memecahnya menjadi daftar transaksi individual.
+Tugas Anda: Membaca teks mentah dari Telegram (1 baris atau banyak baris bertumpuk) dan memecahnya menjadi daftar transaksi individual.
 
 Aturan Output (JSON Array murni):
 - "description": Nama transaksi murni tanpa nominal (contoh: "Bayar tour", "Kasih mamah + susu", "Spp hafsah").
 - "amount": Nominal angka murni dalam Rupiah (integer positif tanpa titik/koma/Rp, contoh: 1400000, 2300000). Konversi 'k'/'rb' ke ribuan, 'jt' ke jutaan.
-- "type": "pengeluaran" atau "pemasukan" (default "pengeluaran", kecuali ada kata seperti gaji, transfer masuk, bonus).
+- "type": "pengeluaran" atau "pemasukan" (default "pengeluaran", kecuali ada kata gaji/pemasukan/bonus/cashback).
 - "category": Kategori singkat (misal: "Belanja", "Tagihan", "Pendidikan", "Makanan", "Transportasi", "Umum").
 
 Kembalikan HANYA array JSON murni tanpa markdown.`
@@ -66,7 +71,7 @@ Kembalikan HANYA array JSON murni tanpa markdown.`
 
   if (!response.ok) {
     const errText = await response.text()
-    throw new Error(`Gemini Error: ${errText}`)
+    throw new Error(`Gemini API Error: ${errText}`)
   }
 
   const resData = await response.json()
@@ -90,11 +95,12 @@ Kembalikan HANYA array JSON murni tanpa markdown.`
 }
 
 export async function POST(req: Request) {
+  let chatId: number | string | null = null
+
   try {
     const update = await req.json()
-    const message = update?.message
-    const chatId = message?.chat?.id
-    const text = message?.text || ''
+    chatId = update?.message?.chat?.id || null
+    const text = update?.message?.text || ''
 
     if (!chatId || !text) {
       return NextResponse.json({ ok: true })
@@ -103,27 +109,29 @@ export async function POST(req: Request) {
     const parsedItems = await parseWithGeminiAI(text)
 
     if (parsedItems.length === 0) {
-      await sendTelegramMessage(chatId, '❌ Gagal membaca format transaksi.')
+      await sendTelegramMessage(chatId, '❌ Tidak ada format transaksi valid yang terdeteksi.')
       return NextResponse.json({ ok: true })
     }
 
+    // Simpan ke Supabase
     const { data, error } = await supabase
       .from('expenses')
       .insert(parsedItems)
       .select()
 
     if (error) {
-      await sendTelegramMessage(chatId, `❌ Gagal menyimpan: ${error.message}`)
+      await sendTelegramMessage(chatId, `❌ Gagal simpan ke DB: ${error.message}`)
       return NextResponse.json({ ok: true })
     }
 
+    // Kirim konfirmasi berhasil
     let replyText = `✅ <b>Berhasil mencatat ${data.length} transaksi!</b>\n\n`
     let totalNominal = 0
 
     data.forEach((item: any, idx: number) => {
       totalNominal += item.amount
       const formattedRp = new Intl.NumberFormat('id-ID').format(item.amount)
-      replyText += `${idx + 1}. ${item.description} — <b>Rp ${formattedRp}</b>\n`
+      replyText += `${idx + 1}. ${item.description} — <b>Rp${formattedRp}</b>\n`
     })
 
     const totalRp = new Intl.NumberFormat('id-ID').format(totalNominal)
@@ -132,8 +140,11 @@ export async function POST(req: Request) {
     await sendTelegramMessage(chatId, replyText)
     return NextResponse.json({ ok: true })
 
-  } catch (err: unknown) {
-    console.error('Telegram webhook error:', err)
+  } catch (err: any) {
+    console.error('Error Webhook Telegram:', err)
+    if (chatId) {
+      await sendTelegramMessage(chatId, `⚠️ Terjadi kesalahan: ${err?.message || 'Server error'}`)
+    }
     return NextResponse.json({ ok: true })
   }
 }
