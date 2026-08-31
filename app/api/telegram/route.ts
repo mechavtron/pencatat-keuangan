@@ -33,7 +33,7 @@ async function sendTelegramMessage(chatId: number | string, text: string) {
 
 async function parseWithGeminiAI(text: string): Promise<ParsedItem[]> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
-  if (!apiKey) throw new Error('GEMINI_API_KEY belum terpasang di Vercel.')
+  if (!apiKey) throw new Error('GEMINI_API_KEY belum terpasang di Vercel Environment Variables.')
 
   // Bersihkan teks dari awalan berulang seperti "jae:"
   const cleanInput = text.replace(/^(jae:\s*)+/gi, '').trim()
@@ -47,10 +47,10 @@ Aturan Output (JSON Array murni):
 - "type": "pengeluaran" atau "pemasukan" (default "pengeluaran", kecuali ada kata gaji/pemasukan/bonus/cashback).
 - "category": Kategori singkat (misal: "Belanja", "Tagihan", "Pendidikan", "Makanan", "Transportasi", "Umum").
 
-Kembalikan HANYA array JSON murni tanpa markdown.`
+Kembalikan HANYA array JSON murni tanpa pembungkus markdown.`
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -78,7 +78,8 @@ Kembalikan HANYA array JSON murni tanpa markdown.`
   const rawJson = resData.candidates?.[0]?.content?.parts?.[0]?.text
   if (!rawJson) return []
 
-  const parsed = JSON.parse(rawJson)
+  const cleanJsonStr = rawJson.replace(/```json/gi, '').replace(/```/g, '').trim()
+  const parsed = JSON.parse(cleanJsonStr)
 
   if (Array.isArray(parsed)) {
     return parsed
@@ -131,7 +132,7 @@ export async function POST(req: Request) {
     data.forEach((item: any, idx: number) => {
       totalNominal += item.amount
       const formattedRp = new Intl.NumberFormat('id-ID').format(item.amount)
-      replyText += `${idx + 1}. ${item.description} — <b>Rp${formattedRp}</b>\n`
+      replyText += `${idx + 1}. ${item.description} — <b>Rp ${formattedRp}</b>\n`
     })
 
     const totalRp = new Intl.NumberFormat('id-ID').format(totalNominal)

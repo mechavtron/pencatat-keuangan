@@ -12,14 +12,11 @@ interface ParsedItem {
   category: string
 }
 
-// ----------------------------------------------------
-// 1. INTEGRASI GEMINI AI PARSER
-// ----------------------------------------------------
 async function parseWithGeminiAI(text: string): Promise<ParsedItem[]> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY belum dikonfigurasi.')
-  }
+  if (!apiKey) throw new Error('GEMINI_API_KEY belum dikonfigurasi.')
+
+  const cleanInput = text.replace(/^(jae:\s*)+/gi, '').trim()
 
   const systemPrompt = `Anda adalah sistem parser transaksi keuangan otomatis.
 Tugas Anda: Membaca teks mentah/acak (1 baris panjang, daftar enter, atau salinan dari bot Telegram/WhatsApp) dan mengekstrak daftar transaksi keuangan.
@@ -35,7 +32,7 @@ Aturan Pemisahan:
 Kembalikan HANYA array JSON murni tanpa markdown/penjelasan tambahan.`
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -43,7 +40,7 @@ Kembalikan HANYA array JSON murni tanpa markdown/penjelasan tambahan.`
         contents: [
           {
             role: 'user',
-            parts: [{ text: `${systemPrompt}\n\nTeks Input:\n"""\n${text}\n"""` }],
+            parts: [{ text: `${systemPrompt}\n\nTeks Input:\n"""\n${cleanInput}\n"""` }],
           },
         ],
         generationConfig: {
@@ -63,7 +60,8 @@ Kembalikan HANYA array JSON murni tanpa markdown/penjelasan tambahan.`
   const rawJson = resData.candidates?.[0]?.content?.parts?.[0]?.text
   if (!rawJson) return []
 
-  const parsed = JSON.parse(rawJson)
+  const cleanJsonStr = rawJson.replace(/```json/gi, '').replace(/```/g, '').trim()
+  const parsed = JSON.parse(cleanJsonStr)
 
   if (Array.isArray(parsed)) {
     return parsed
@@ -79,73 +77,6 @@ Kembalikan HANYA array JSON murni tanpa markdown/penjelasan tambahan.`
   return []
 }
 
-// ----------------------------------------------------
-// 2. CADANGAN (FALLBACK REGEX PARSER)
-// ----------------------------------------------------
-function parseFallback(text: string): ParsedItem[] {
-  let cleaned = text.replace(/\u00A0/g, ' ')
-  cleaned = cleaned.replace(/✅?\s*Berhasil dicatat!\s*✨?/gi, '')
-
-  cleaned = cleaned.replace(
-    /(\b\d{4,}\b|\b\d+(?:\.\d{3})+\b|\b\d+\s*(?:k|rb|ribu|jt|juta)\b)\s+([a-zA-Z✨🛍️🏠])/gi,
-    '$1\n$2'
-  )
-
-  const lines = cleaned.split('\n')
-  const items: ParsedItem[] = []
-  let currentDesc = ''
-
-  for (let line of lines) {
-    line = line.trim()
-    if (!line) continue
-
-    const allAmounts = line.match(/(?:Rp\.?\s*)?(?:\d+(?:\.\d{3})+|\b\d{4,}\b|\b\d+\s*(?:k|rb|ribu|jt|juta)\b)/gi)
-
-    if (allAmounts && allAmounts.length > 0) {
-      const rawAmtStr = allAmounts[allAmounts.length - 1]
-      const descPart = line.replace(rawAmtStr, '')
-      let fullDesc = (currentDesc + ' ' + descPart).trim()
-
-      fullDesc = fullDesc.replace(/(?:Lainnya|Belanja|Tagihan|Makanan|Pendidikan|Transportasi|Kesehatan|Rutin)\s*[\—\-–]?\s*/gi, '')
-      fullDesc = fullDesc.replace(/\bRp\.?\b/gi, '')
-      fullDesc = fullDesc.replace(/^[\s\d\.\)\-\✨\🛍️\🏠]+/g, '')
-      fullDesc = fullDesc.trim().replace(/^[\—\-–.,:;+]+|[\—\-–.,:;+]+$/g, '')
-
-      const cleanNum = rawAmtStr.replace(/Rp/gi, '').replace(/\./g, '').replace(',', '.').trim()
-      let amount = 0
-
-      if (/k|rb|ribu/i.test(cleanNum)) {
-        amount = parseFloat(cleanNum.replace(/k|rb|ribu/gi, '')) * 1000
-      } else if (/jt|juta/i.test(cleanNum)) {
-        amount = parseFloat(cleanNum.replace(/jt|juta/gi, '')) * 1000000
-      } else {
-        amount = parseFloat(cleanNum.replace(/[^\d\.]/g, ''))
-      }
-
-      if (!isNaN(amount) && amount > 0 && fullDesc.length > 0) {
-        const isIncome = /\bgaji\b|pemasukan|bonus|cashback|transfer/i.test(fullDesc)
-        items.push({
-          description: fullDesc,
-          amount: Math.round(amount),
-          type: isIncome ? 'pemasukan' : 'pengeluaran',
-          category: isIncome ? 'Pemasukan' : 'Umum',
-        })
-      }
-      currentDesc = ''
-    } else {
-      const cleanedLine = line.replace(/^[\s\d\.\)\-\✨\🛍️\🏠]+/g, '').trim()
-      if (cleanedLine) {
-        currentDesc = (currentDesc + ' ' + cleanedLine).trim()
-      }
-    }
-  }
-
-  return items
-}
-
-// ----------------------------------------------------
-// 3. HANDLER UTAMA API
-// ----------------------------------------------------
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -155,14 +86,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Teks input kosong' }, { status: 400 })
     }
 
-    let parsedItems: ParsedItem[] = []
-
-    try {
-      parsedItems = await parseWithGeminiAI(text)
-    } catch (aiErr) {
-      console.warn('Menggunakan fallback parser:', aiErr)
-      parsedItems = parseFallback(text)
-    }
+    const parsedItems = await parseWithGeminiAI(text)
 
     if (parsedItems.length === 0) {
       return NextResponse.json(
