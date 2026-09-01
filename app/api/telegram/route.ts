@@ -12,6 +12,7 @@ interface ParsedItem {
   amount: number
   type: 'pemasukan' | 'pengeluaran'
   category: string
+  user_name: string
 }
 
 async function sendTelegramMessage(chatId: number | string, text: string) {
@@ -31,23 +32,22 @@ async function sendTelegramMessage(chatId: number | string, text: string) {
   }
 }
 
-async function parseWithGeminiAI(text: string): Promise<ParsedItem[]> {
+async function parseWithGeminiAI(text: string, detectedUser: string): Promise<ParsedItem[]> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
-  if (!apiKey) throw new Error('GEMINI_API_KEY belum terpasang di Vercel Environment Variables.')
+  if (!apiKey) throw new Error('GEMINI_API_KEY belum terpasang di Vercel.')
 
-  // Bersihkan teks dari awalan berulang seperti "jae:"
-  const cleanInput = text.replace(/^(jae:\s*)+/gi, '').trim()
+  const cleanInput = text.replace(/^(jae:|miki:)\s*/gi, '').trim()
 
-  const systemPrompt = `Anda adalah sistem parser pencatat keuangan Telegram.
-Tugas Anda: Membaca teks mentah dari Telegram (1 baris atau banyak baris bertumpuk) dan memecahnya menjadi daftar transaksi individual.
+  const systemPrompt = `Anda adalah parser pencatat keuangan Telegram.
+Tugas Anda: Membaca teks mentah transaksi dan memecahnya menjadi array JSON murni.
 
-Aturan Output (JSON Array murni):
-- "description": Nama transaksi murni tanpa nominal (contoh: "Bayar tour", "Kasih mamah + susu", "Spp hafsah").
-- "amount": Nominal angka murni dalam Rupiah (integer positif tanpa titik/koma/Rp, contoh: 1400000, 2300000). Konversi 'k'/'rb' ke ribuan, 'jt' ke jutaan.
-- "type": "pengeluaran" atau "pemasukan" (default "pengeluaran", kecuali ada kata gaji/pemasukan/bonus/cashback).
-- "category": Kategori singkat (misal: "Belanja", "Tagihan", "Pendidikan", "Makanan", "Transportasi", "Umum").
+Aturan Output:
+- "description": Nama transaksi murni (tanpa nominal, contoh: "Bayar tour", "Kasih mamah + susu").
+- "amount": Nominal angka murni Rupiah (integer tanpa titik/koma/Rp). Konversi k/rb ke ribuan, jt ke jutaan.
+- "type": "pengeluaran" atau "pemasukan" (default "pengeluaran").
+- "category": Kategori singkat ("Belanja", "Tagihan", "Pendidikan", "Makanan", "Transportasi", "Umum").
 
-Kembalikan HANYA array JSON murni tanpa pembungkus markdown.`
+Kembalikan HANYA array JSON murni tanpa markdown.`
 
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
@@ -75,9 +75,7 @@ Kembalikan HANYA array JSON murni tanpa pembungkus markdown.`
   }
 
   const resData = await response.json()
-  const rawJson = resData.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!rawJson) return []
-
+  const rawJson = resData.candidates?.[0]?.content?.parts?.[0]?.text || '[]'
   const cleanJsonStr = rawJson.replace(/```json/gi, '').replace(/```/g, '').trim()
   const parsed = JSON.parse(cleanJsonStr)
 
@@ -88,6 +86,7 @@ Kembalikan HANYA array JSON murni tanpa pembungkus markdown.`
         amount: Math.abs(Number(item.amount) || 0),
         type: item.type === 'pemasukan' ? ('pemasukan' as const) : ('pengeluaran' as const),
         category: String(item.category || 'Umum'),
+        user_name: detectedUser,
       }))
       .filter((item) => item.amount > 0 && item.description.length > 0)
   }
@@ -100,33 +99,44 @@ export async function POST(req: Request) {
 
   try {
     const update = await req.json()
-    chatId = update?.message?.chat?.id || null
-    const text = update?.message?.text || ''
+    const message = update?.message
+    chatId = message?.chat?.id || null
+    const text = message?.text || ''
+    const senderFirstName = (message?.from?.first_name || '').toLowerCase()
 
     if (!chatId || !text) {
       return NextResponse.json({ ok: true })
     }
 
-    const parsedItems = await parseWithGeminiAI(text)
+    // Deteksi Pengirim: dari nama akun Telegram atau awalan teks ("miki:" / "jae:")
+    let detectedUser = 'Jae'
+    const lowerText = text.toLowerCase()
+
+    if (lowerText.startsWith('miki:') || senderFirstName.includes('miki')) {
+      detectedUser = 'Miki'
+    } else if (lowerText.startsWith('jae:') || senderFirstName.includes('jae')) {
+      detectedUser = 'Jae'
+    }
+
+    const parsedItems = await parseWithGeminiAI(text, detectedUser)
 
     if (parsedItems.length === 0) {
-      await sendTelegramMessage(chatId, '❌ Tidak ada format transaksi valid yang terdeteksi.')
+      await sendTelegramMessage(chatId, '❌ Format transaksi tidak terbaca.')
       return NextResponse.json({ ok: true })
     }
 
-    // Simpan ke Supabase
     const { data, error } = await supabase
       .from('expenses')
       .insert(parsedItems)
       .select()
 
     if (error) {
-      await sendTelegramMessage(chatId, `❌ Gagal simpan ke DB: ${error.message}`)
+      await sendTelegramMessage(chatId, `❌ Gagal simpan DB: ${error.message}`)
       return NextResponse.json({ ok: true })
     }
 
-    // Kirim konfirmasi berhasil
-    let replyText = `✅ <b>Berhasil mencatat ${data.length} transaksi!</b>\n\n`
+    const iconUser = detectedUser === 'Miki' ? '👩 Miki' : '👨‍🦱 Jae'
+    let replyText = `✅ <b>Berhasil mencatat ${data.length} transaksi (${iconUser})!</b>\n\n`
     let totalNominal = 0
 
     data.forEach((item: any, idx: number) => {
@@ -142,7 +152,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true })
 
   } catch (err: any) {
-    console.error('Error Webhook Telegram:', err)
     if (chatId) {
       await sendTelegramMessage(chatId, `⚠️ Terjadi kesalahan: ${err?.message || 'Server error'}`)
     }

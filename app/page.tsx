@@ -13,6 +13,7 @@ interface Transaction {
   amount: number
   type: 'pemasukan' | 'pengeluaran'
   category: string
+  user_name?: string
   created_at: string
 }
 
@@ -41,14 +42,18 @@ const getCategoryDetails = (category: string, description: string) => {
 export default function Home() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth()) // 0 - 11
+  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth())
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear())
   const [isPaydayMode, setIsPaydayMode] = useState(true)
-  const [selectedCategory, setSelectedCategory] = useState<string>('Semua')
   
+  // Filter States
+  const [selectedCategory, setSelectedCategory] = useState<string>('Semua')
+  const [selectedUserFilter, setSelectedUserFilter] = useState<string>('Semua') // Semua | Jae | Miki
+
   // Modal Batch Input
   const [isBatchOpen, setIsBatchOpen] = useState(false)
   const [batchText, setBatchText] = useState('')
+  const [batchUser, setBatchUser] = useState<'Jae' | 'Miki'>('Jae')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const fetchTransactions = async () => {
@@ -68,31 +73,32 @@ export default function Home() {
     fetchTransactions()
   }, [])
 
-  // Filter Berdasarkan Bulan & Siklus Gajian (Tanggal 29)
+  // 1. Filter Tanggal & Siklus Gajian (Tanggal 29)
   const filteredByDate = transactions.filter((t) => {
     const tDate = new Date(t.created_at)
     const tMonth = tDate.getMonth()
     const tYear = tDate.getFullYear()
-    const tDay = tDate.getDate()
 
     if (!isPaydayMode) {
       return tMonth === selectedMonth && tYear === selectedYear
     } else {
-      // Siklus gajian: Tanggal 29 bulan sebelumnya s/d Tanggal 28 bulan pilihan
       const cycleStart = new Date(selectedYear, selectedMonth - 1, 29)
       const cycleEnd = new Date(selectedYear, selectedMonth, 28, 23, 59, 59)
       return tDate >= cycleStart && tDate <= cycleEnd
     }
   })
 
-  // Filter Berdasarkan Pill Kategori
+  // 2. Filter Pengguna (Semua / Jae / Miki) & Kategori
   const finalFiltered = filteredByDate.filter((t) => {
+    const userMatch = selectedUserFilter === 'Semua' || (t.user_name || 'Jae') === selectedUserFilter
+    if (!userMatch) return false
+
     if (selectedCategory === 'Semua') return true
     const details = getCategoryDetails(t.category, t.description)
     return details.label.toLowerCase() === selectedCategory.toLowerCase()
   })
 
-  // Hitung Totals
+  // Hitung Saldo Periode
   const totalIncome = filteredByDate
     .filter((t) => t.type === 'pemasukan')
     .reduce((sum, t) => sum + t.amount, 0)
@@ -103,7 +109,6 @@ export default function Home() {
 
   const netBalance = totalIncome - totalExpense
 
-  // Hapus Transaksi
   const handleDelete = async (id: string) => {
     if (!confirm('Hapus transaksi ini?')) return
     const { error } = await supabase.from('expenses').delete().eq('id', id)
@@ -112,15 +117,15 @@ export default function Home() {
     }
   }
 
-  // Submit Batch Input
   const handleBatchSubmit = async () => {
     if (!batchText.trim()) return
     setIsSubmitting(true)
     try {
+      const formattedText = `${batchUser.toLowerCase()}: ${batchText}`
       const res = await fetch('/api/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: batchText }),
+        body: JSON.stringify({ text: formattedText }),
       })
       const data = await res.json()
       if (res.ok && data.success) {
@@ -137,21 +142,17 @@ export default function Home() {
     }
   }
 
-  const months = [
-    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
-  ]
-
+  const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
   const categories = ['Semua', 'Pendidikan', 'Tagihan', 'Belanja', 'Kebutuhan', 'Umum']
 
   return (
     <main className="min-h-screen bg-slate-50/50 py-8 px-4">
       <div className="max-w-2xl mx-auto space-y-6">
 
-        {/* HEADER: TITLE + PILIHAN BULAN & TAHUN */}
+        {/* HEADER: TITLE + OPTION BULAN & TAHUN */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <span className="text-xs font-semibold text-emerald-800 tracking-wider uppercase">Pencatat Keuangan</span>
+            <span className="text-xs font-semibold text-emerald-800 tracking-wider uppercase">Pencatat Keuangan Keluarga</span>
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">Ringkasan Keuangan</h1>
           </div>
 
@@ -159,7 +160,7 @@ export default function Home() {
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(Number(e.target.value))}
-              className="bg-white border border-slate-200 text-slate-700 font-semibold text-xs rounded-xl px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="bg-white border border-slate-200 text-slate-700 font-semibold text-xs rounded-xl px-3 py-2 shadow-sm focus:outline-none"
             >
               {months.map((m, idx) => (
                 <option key={m} value={idx}>{m}</option>
@@ -169,7 +170,7 @@ export default function Home() {
             <select
               value={selectedYear}
               onChange={(e) => setSelectedYear(Number(e.target.value))}
-              className="bg-white border border-slate-200 text-slate-700 font-semibold text-xs rounded-xl px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="bg-white border border-slate-200 text-slate-700 font-semibold text-xs rounded-xl px-3 py-2 shadow-sm focus:outline-none"
             >
               {[2025, 2026, 2027].map((y) => (
                 <option key={y} value={y}>{y}</option>
@@ -178,7 +179,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* TOGGLE SIKLUS GAJIAN OTOMATIS */}
+        {/* TOGGLE GAJIAN */}
         <div className="bg-white border border-slate-200/80 rounded-2xl p-3.5 shadow-sm flex items-center justify-between">
           <div>
             <p className="text-xs font-bold text-slate-800">Mode Siklus Gajian Otomatis</p>
@@ -192,7 +193,7 @@ export default function Home() {
           />
         </div>
 
-        {/* TOMBOL BATCH INPUT */}
+        {/* BATCH BUTTON */}
         <button
           onClick={() => setIsBatchOpen(true)}
           className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm py-3 px-4 rounded-2xl shadow-sm transition-all flex items-center justify-center gap-2"
@@ -200,7 +201,7 @@ export default function Home() {
           <span>⚡</span> Input Banyak Transaksi (Batch)
         </button>
 
-        {/* KARTU SALDO UTAMA + MASKOT LUCU */}
+        {/* KARTU SALDO + MASKOT */}
         <div className="bg-emerald-950 text-white p-6 rounded-3xl shadow-md border border-emerald-900 space-y-6">
           <div className="flex justify-between items-start">
             <div>
@@ -233,7 +234,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* PILL FILTER KATEGORI */}
+        {/* FILTER USER & KATEGORI PILLS */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
@@ -242,11 +243,24 @@ export default function Home() {
                 {finalFiltered.length}
               </span>
             </h3>
-            <button onClick={fetchTransactions} className="text-xs text-emerald-700 font-semibold hover:underline">
-              Refresh
-            </button>
+
+            {/* TOGGLE FILTER USER (Semua / Jae / Miki) */}
+            <div className="flex bg-slate-200/80 p-0.5 rounded-xl text-xs font-bold">
+              {['Semua', 'Jae', 'Miki'].map((usr) => (
+                <button
+                  key={usr}
+                  onClick={() => setSelectedUserFilter(usr)}
+                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                    selectedUserFilter === usr ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+                  }`}
+                >
+                  {usr === 'Jae' ? '👨‍🦱 Jae' : usr === 'Miki' ? '👩 Miki' : 'Semua'}
+                </button>
+              ))}
+            </div>
           </div>
 
+          {/* PILL KATEGORI */}
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
             {categories.map((cat) => (
               <button
@@ -264,22 +278,22 @@ export default function Home() {
           </div>
         </div>
 
-        {/* DOKUMEN TABEL FLAT RIWAYAT TRANSAKSI */}
+        {/* DOKUMEN TABEL FLAT RIWAYAT */}
         <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm overflow-hidden">
           {loading ? (
             <div className="p-8 text-center text-slate-400 text-sm">Memuat transaksi...</div>
           ) : finalFiltered.length === 0 ? (
             <div className="p-8 text-center text-slate-400 text-sm">
-              🎈 Belum ada transaksi di periode/kategori ini.
+              🎈 Belum ada transaksi di filter ini.
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
               {finalFiltered.map((item) => {
                 const details = getCategoryDetails(item.category, item.description)
+                const isMiki = (item.user_name || 'Jae') === 'Miki'
                 const formattedDate = new Date(item.created_at).toLocaleDateString('id-ID', {
                   day: '2-digit',
                   month: 'short',
-                  year: 'numeric'
                 })
 
                 return (
@@ -291,6 +305,10 @@ export default function Home() {
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-slate-800 truncate">{item.description}</p>
                         <div className="flex items-center gap-2 mt-0.5">
+                          {/* Badge User (👨‍🦱 Jae / 👩 Miki) */}
+                          <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold border ${isMiki ? 'bg-purple-50 text-purple-600 border-purple-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                            {isMiki ? '👩 Miki' : '👨‍🦱 Jae'}
+                          </span>
                           <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium border ${details.bg}`}>
                             {details.label}
                           </span>
@@ -324,10 +342,30 @@ export default function Home() {
               <h3 className="font-bold text-slate-900">⚡ Input Banyak Transaksi (Batch)</h3>
               <button onClick={() => setIsBatchOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
             </div>
+
+            {/* PILIH PENGINPUT BATCH */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-semibold text-slate-600">Catat Atas Nama:</span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setBatchUser('Jae')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${batchUser === 'Jae' ? 'bg-emerald-700 text-white border-emerald-700' : 'bg-slate-100 text-slate-600 border-slate-200'}`}
+                >
+                  👨‍🦱 Jae
+                </button>
+                <button
+                  onClick={() => setBatchUser('Miki')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${batchUser === 'Miki' ? 'bg-purple-600 text-white border-purple-600' : 'bg-slate-100 text-slate-600 border-slate-200'}`}
+                >
+                  👩 Miki
+                </button>
+              </div>
+            </div>
+
             <textarea
               value={batchText}
               onChange={(e) => setBatchText(e.target.value)}
-              placeholder="Tempelkan daftar transaksi di sini (misal dari Telegram / WhatsApp)..."
+              placeholder="Tempelkan daftar transaksi di sini..."
               rows={6}
               className="w-full p-3 border border-slate-200 rounded-2xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
