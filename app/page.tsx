@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import * as XLSX from 'xlsx'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -105,7 +106,6 @@ export default function Home() {
     .filter((t) => t.type === 'pemasukan')
     .reduce((sum, t) => sum + t.amount, 0)
 
-  // Sub-Total Pemasukan Per Orang
   const totalIncomeJae = filteredByDate
     .filter((t) => t.type === 'pemasukan' && (t.user_name || 'Jae') === 'Jae')
     .reduce((sum, t) => sum + t.amount, 0)
@@ -118,7 +118,6 @@ export default function Home() {
     .filter((t) => t.type === 'pengeluaran')
     .reduce((sum, t) => sum + t.amount, 0)
 
-  // Sub-Total Pengeluaran Per Orang
   const totalExpenseJae = filteredByDate
     .filter((t) => t.type === 'pengeluaran' && (t.user_name || 'Jae') === 'Jae')
     .reduce((sum, t) => sum + t.amount, 0)
@@ -128,6 +127,38 @@ export default function Home() {
     .reduce((sum, t) => sum + t.amount, 0)
 
   const netBalance = totalIncome - totalExpense
+
+  // 🔹 FUNGSI EXPORT DATA KE EXCEL (.xlsx)
+  const handleExportExcel = () => {
+    if (filteredByDate.length === 0) {
+      alert('Tidak ada data transaksi di periode ini untuk diekspor.')
+      return
+    }
+
+    const monthsName = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
+
+    // Format susunan kolom tabel Excel
+    const dataToExport = filteredByDate.map((item, index) => ({
+      No: index + 1,
+      Tanggal: new Date(item.created_at).toLocaleDateString('id-ID', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }),
+      Pengguna: item.user_name || 'Jae',
+      Deskripsi: item.description,
+      Kategori: getCategoryDetails(item.category, item.description).label,
+      Tipe: item.type === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran',
+      Nominal: item.amount,
+    }))
+
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Transaksi Keuangan')
+
+    const fileName = `Laporan_Keuangan_${monthsName[selectedMonth]}_${selectedYear}.xlsx`
+    XLSX.writeFile(workbook, fileName)
+  }
 
   const handleDelete = async (id: string) => {
     if (!confirm('Hapus transaksi ini?')) return
@@ -169,14 +200,14 @@ export default function Home() {
     <main className="min-h-screen bg-slate-50/50 py-8 px-4">
       <div className="max-w-2xl mx-auto space-y-6">
 
-        {/* HEADER: JUDUL + DROPDOWN BULAN & TAHUN */}
+        {/* HEADER: JUDUL + DROPDOWN BULAN/TAHUN + TOMBOL EXPORT */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <span className="text-xs font-semibold text-emerald-800 tracking-wider uppercase">Pencatat Keuangan Keluarga</span>
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">Ringkasan Keuangan</h1>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(Number(e.target.value))}
@@ -196,6 +227,15 @@ export default function Home() {
                 <option key={y} value={y}>{y}</option>
               ))}
             </select>
+
+            {/* TOMBOL EXPORT EXCEL */}
+            <button
+              onClick={handleExportExcel}
+              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-xs px-3 py-2 rounded-xl shadow-sm transition-all flex items-center gap-1.5"
+              title="Unduh Laporan Excel"
+            >
+              📊 Export Excel
+            </button>
           </div>
         </div>
 
@@ -221,7 +261,7 @@ export default function Home() {
           <span>⚡</span> Input Banyak Transaksi (Batch)
         </button>
 
-        {/* KARTU SALDO UTAMA + MASKOT + RINCIAN PEMASUKAN & PENGELUARAN JAE & MIKI */}
+        {/* KARTU SALDO UTAMA */}
         <div className="bg-emerald-950 text-white p-6 rounded-3xl shadow-md border border-emerald-900 space-y-6">
           <div className="flex justify-between items-start">
             <div>
@@ -246,7 +286,6 @@ export default function Home() {
                 + Rp {new Intl.NumberFormat('id-ID').format(totalIncome)}
               </p>
 
-              {/* Sub-Total Pemasukan Jae & Miki */}
               <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-emerald-900/60 text-[11px]">
                 <div className="bg-emerald-900/70 px-2 py-1 rounded-lg border border-emerald-800">
                   <span className="text-emerald-300">👨‍🦱 Jae: </span>
@@ -270,7 +309,6 @@ export default function Home() {
                 - Rp {new Intl.NumberFormat('id-ID').format(totalExpense)}
               </p>
 
-              {/* Sub-Total Pengeluaran Jae & Miki */}
               <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-emerald-900/60 text-[11px]">
                 <div className="bg-emerald-900/70 px-2 py-1 rounded-lg border border-emerald-800">
                   <span className="text-emerald-300">👨‍🦱 Jae: </span>
@@ -299,7 +337,6 @@ export default function Home() {
               </span>
             </h3>
 
-            {/* FILTER USER (Semua / Jae / Miki) */}
             <div className="flex bg-slate-200/80 p-0.5 rounded-xl text-xs font-bold">
               {['Semua', 'Jae', 'Miki'].map((usr) => (
                 <button
@@ -315,7 +352,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* PILL KATEGORI */}
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
             {categories.map((cat) => (
               <button
@@ -333,7 +369,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* DOKUMEN TABEL FLAT RIWAYAT TRANSAKSI */}
+        {/* TABEL FLAT RIWAYAT TRANSAKSI */}
         <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm overflow-hidden">
           {loading ? (
             <div className="p-8 text-center text-slate-400 text-sm">Memuat transaksi...</div>
@@ -360,7 +396,6 @@ export default function Home() {
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-slate-800 truncate">{item.description}</p>
                         <div className="flex items-center gap-2 mt-0.5">
-                          {/* Badge User (👨‍🦱 Jae / 👩 Miki) */}
                           <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold border ${isMiki ? 'bg-purple-50 text-purple-600 border-purple-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
                             {isMiki ? '👩 Miki' : '👨‍🦱 Jae'}
                           </span>
@@ -398,7 +433,6 @@ export default function Home() {
               <button onClick={() => setIsBatchOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
             </div>
 
-            {/* PILIH PENGINPUT BATCH */}
             <div className="flex items-center gap-3">
               <span className="text-xs font-semibold text-slate-600">Catat Atas Nama:</span>
               <div className="flex gap-2">
