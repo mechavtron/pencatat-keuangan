@@ -32,22 +32,74 @@ async function sendTelegramMessage(chatId: number | string, text: string) {
   }
 }
 
-async function parseWithGeminiAI(text: string, detectedUser: string): Promise<ParsedItem[]> {
+// Fungsi untuk mengunduh foto dari Telegram dan mengubahnya ke Base64
+async function getTelegramImageBase64(fileId: string): Promise<string | null> {
+  if (!TELEGRAM_TOKEN) return null
+  try {
+    const fileRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`)
+    const fileData = await fileRes.json()
+    const filePath = fileData?.result?.file_path
+    if (!filePath) return null
+
+    const imageRes = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`)
+    const arrayBuffer = await imageRes.arrayBuffer()
+    return Buffer.from(arrayBuffer).toString('base64')
+  } catch (err) {
+    console.error('Gagal mengunduh gambar Telegram:', err)
+    return null
+  }
+}
+
+async function parseWithGeminiAI(
+  text: string, 
+  imageBase64: string | null, 
+  detectedUser: string
+): Promise<ParsedItem[]> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
   if (!apiKey) throw new Error('GEMINI_API_KEY belum terpasang di Vercel.')
 
   const cleanInput = text.replace(/^(jae:|miki:)\s*/gi, '').trim()
 
-  const systemPrompt = `Anda adalah parser pencatat keuangan Telegram.
-Tugas Anda: Membaca teks mentah transaksi dan memecahnya menjadi array JSON murni.
+  const systemPrompt = `Anda adalah parser keuangan otomatis cerdas.
+Tugas Anda: Membaca masukan pengguna (berupa teks mentah atau foto struk/nota/bukti transfer) dan mengekstrak transaksi keuangan ke dalam JSON Array murni.
 
-Aturan Output:
-- "description": Nama transaksi murni (tanpa nominal, contoh: "Bayar tour", "Kasih mamah + susu").
-- "amount": Nominal angka murni Rupiah (integer tanpa titik/koma/Rp). Konversi k/rb ke ribuan, jt ke jutaan.
+Aturan Pemrosesan Gambar (Jika ada foto):
+- Baca nama toko/merchant (contoh: "Alfamart", "Indomaret", "Tokopedia", "SPBU").
+- Baca TOTAL AKHIR / Grand Total nominal pengeluaran (contoh: jika di struk tertera "Total Belanja 528.700", ambil 528700).
+- Jika ada teks tambahan di caption foto, gunakan sebagai pelengkap deskripsi.
+
+Aturan Output JSON Array:
+[
+  {
+    "description": "Nama Toko atau Deskripsi Transaksi",
+    "amount": 528700,
+    "type": "pengeluaran",
+    "category": "Belanja"
+  }
+]
+
+Persyaratan:
+- "amount": nominal integer murni Rupiah tanpa titik/koma/Rp.
 - "type": "pengeluaran" atau "pemasukan" (default "pengeluaran").
 - "category": Kategori singkat ("Belanja", "Tagihan", "Pendidikan", "Makanan", "Transportasi", "Umum").
 
 Kembalikan HANYA array JSON murni tanpa markdown.`
+
+  const parts: any[] = []
+
+  // Jika ada foto, masukkan data image base64 ke Gemini Vision
+  if (imageBase64) {
+    parts.push({
+      inline_data: {
+        mime_type: 'image/jpeg',
+        data: imageBase64,
+      },
+    })
+  }
+
+  parts.push({
+    text: `${systemPrompt}\n\nTeks/Caption Input:\n"""\n${cleanInput || 'Tolong ekstrak total pengeluaran dari struk/foto ini.'}\n"""`,
+  })
 
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
@@ -55,12 +107,7 @@ Kembalikan HANYA array JSON murni tanpa markdown.`
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: `${systemPrompt}\n\nTeks Input:\n"""\n${cleanInput}\n"""` }],
-          },
-        ],
+        contents: [{ role: 'user', parts }],
         generationConfig: {
           response_mime_type: 'application/json',
           temperature: 0.1,
@@ -101,14 +148,30 @@ export async function POST(req: Request) {
     const update = await req.json()
     const message = update?.message
     chatId = message?.chat?.id || null
-    const text = message?.text || ''
-    const senderFirstName = (message?.from?.first_name || '').toLowerCase()
 
-    if (!chatId || !text) {
+    if (!chatId || !message) {
       return NextResponse.json({ ok: true })
     }
 
-    // Deteksi Pengirim: dari nama akun Telegram atau awalan teks ("miki:" / "jae:")
+    const text = message?.text || message?.caption || ''
+    const photoArray = message?.photo
+    const document = message?.document
+    const senderFirstName = (message?.from?.first_name || '').toLowerCase()
+
+    // 1. Ambil File ID jika pengguna mengirim foto / dokumen gambar
+    let fileId: string | null = null
+    if (photoArray && photoArray.length > 0) {
+      // Ambil ukuran foto terbesar (elemen terakhir dalam array)
+      fileId = photoArray[photoArray.length - 1].file_id
+    } else if (document && document.mime_type?.startsWith('image/')) {
+      fileId = document.file_id
+    }
+
+    if (!text && !fileId) {
+      return NextResponse.json({ ok: true })
+    }
+
+    // 2. Deteksi Pengirim (Jae vs Miki)
     let detectedUser = 'Jae'
     const lowerText = text.toLowerCase()
 
@@ -118,23 +181,33 @@ export async function POST(req: Request) {
       detectedUser = 'Jae'
     }
 
-    const parsedItems = await parseWithGeminiAI(text, detectedUser)
+    // 3. Unduh foto jika ada
+    let imageBase64: string | null = null
+    if (fileId) {
+      await sendTelegramMessage(chatId, '🔍 <i>Sedang membaca foto struk/nota...</i>')
+      imageBase64 = await getTelegramImageBase64(fileId)
+    }
+
+    // 4. Proses dengan Gemini Vision / Text AI
+    const parsedItems = await parseWithGeminiAI(text, imageBase64, detectedUser)
 
     if (parsedItems.length === 0) {
-      await sendTelegramMessage(chatId, '❌ Format transaksi tidak terbaca.')
+      await sendTelegramMessage(chatId, '❌ Tidak dapat membaca nominal transaksi dari foto/teks ini.')
       return NextResponse.json({ ok: true })
     }
 
+    // 5. Simpan ke Supabase
     const { data, error } = await supabase
       .from('expenses')
       .insert(parsedItems)
       .select()
 
     if (error) {
-      await sendTelegramMessage(chatId, `❌ Gagal simpan DB: ${error.message}`)
+      await sendTelegramMessage(chatId, `❌ Gagal menyimpan ke DB: ${error.message}`)
       return NextResponse.json({ ok: true })
     }
 
+    // 6. Kirim Balasan Konfirmasi
     const iconUser = detectedUser === 'Miki' ? '👩 Miki' : '👨‍🦱 Jae'
     let replyText = `✅ <b>Berhasil mencatat ${data.length} transaksi (${iconUser})!</b>\n\n`
     let totalNominal = 0
