@@ -1,5 +1,6 @@
-export const dynamic = 'force-dynamic'
 'use client'
+
+export const dynamic = 'force-dynamic'
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@supabase/supabase-js'
@@ -49,7 +50,7 @@ export default function Home() {
   
   // Filter States
   const [selectedCategory, setSelectedCategory] = useState<string>('Semua')
-  const [selectedUserFilter, setSelectedUserFilter] = useState<string>('Semua') // Semua | Jae | Miki
+  const [selectedUserFilter, setSelectedUserFilter] = useState<string>('Semua')
 
   // Modal Batch Input
   const [isBatchOpen, setIsBatchOpen] = useState(false)
