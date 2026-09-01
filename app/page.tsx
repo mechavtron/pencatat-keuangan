@@ -105,6 +105,15 @@ export default function Home() {
     .filter((t) => t.type === 'pemasukan')
     .reduce((sum, t) => sum + t.amount, 0)
 
+  // Sub-Total Pemasukan Per Orang
+  const totalIncomeJae = filteredByDate
+    .filter((t) => t.type === 'pemasukan' && (t.user_name || 'Jae') === 'Jae')
+    .reduce((sum, t) => sum + t.amount, 0)
+
+  const totalIncomeMiki = filteredByDate
+    .filter((t) => t.type === 'pemasukan' && t.user_name === 'Miki')
+    .reduce((sum, t) => sum + t.amount, 0)
+
   const totalExpense = filteredByDate
     .filter((t) => t.type === 'pengeluaran')
     .reduce((sum, t) => sum + t.amount, 0)
@@ -212,7 +221,7 @@ export default function Home() {
           <span>⚡</span> Input Banyak Transaksi (Batch)
         </button>
 
-        {/* KARTU SALDO UTAMA + MASKOT + RINCIAN EXPENSE JAE & MIKI */}
+        {/* KARTU SALDO UTAMA + MASKOT + RINCIAN PEMASUKAN & PENGELUARAN JAE & MIKI */}
         <div className="bg-emerald-950 text-white p-6 rounded-3xl shadow-md border border-emerald-900 space-y-6">
           <div className="flex justify-between items-start">
             <div>
@@ -230,12 +239,28 @@ export default function Home() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-emerald-900/80 text-xs">
-            {/* Total Pemasukan */}
+            {/* Total Pemasukan + Rincian Jae & Miki */}
             <div>
               <span className="text-emerald-400 font-medium">Total Pemasukan</span>
               <p className="text-base font-bold text-emerald-300 mt-0.5">
                 + Rp {new Intl.NumberFormat('id-ID').format(totalIncome)}
               </p>
+
+              {/* Sub-Total Pemasukan Jae & Miki */}
+              <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-emerald-900/60 text-[11px]">
+                <div className="bg-emerald-900/70 px-2 py-1 rounded-lg border border-emerald-800">
+                  <span className="text-emerald-300">👨‍🦱 Jae: </span>
+                  <span className="font-semibold text-white">
+                    Rp {new Intl.NumberFormat('id-ID').format(totalIncomeJae)}
+                  </span>
+                </div>
+                <div className="bg-emerald-900/70 px-2 py-1 rounded-lg border border-emerald-800">
+                  <span className="text-purple-300">👩 Miki: </span>
+                  <span className="font-semibold text-white">
+                    Rp {new Intl.NumberFormat('id-ID').format(totalIncomeMiki)}
+                  </span>
+                </div>
+              </div>
             </div>
 
             {/* Total Pengeluaran + Rincian Jae & Miki */}
