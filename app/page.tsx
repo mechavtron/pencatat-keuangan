@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic'
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -88,7 +89,7 @@ export default function Home() {
     }
   })
 
-  // 2. Filter Pengguna (Semua / Jae / Miki) & Kategori
+  // 2. Filter Pengguna & Kategori
   const finalFiltered = filteredByDate.filter((t) => {
     const userMatch = selectedUserFilter === 'Semua' || (t.user_name || 'Jae') === selectedUserFilter
     if (!userMatch) return false
@@ -98,13 +99,22 @@ export default function Home() {
     return details.label.toLowerCase() === selectedCategory.toLowerCase()
   })
 
-  // Hitung Saldo Periode
+  // Hitung Total Keuangan
   const totalIncome = filteredByDate
     .filter((t) => t.type === 'pemasukan')
     .reduce((sum, t) => sum + t.amount, 0)
 
   const totalExpense = filteredByDate
     .filter((t) => t.type === 'pengeluaran')
+    .reduce((sum, t) => sum + t.amount, 0)
+
+  // Sub-Total Pengeluaran Per Orang
+  const totalExpenseJae = filteredByDate
+    .filter((t) => t.type === 'pengeluaran' && (t.user_name || 'Jae') === 'Jae')
+    .reduce((sum, t) => sum + t.amount, 0)
+
+  const totalExpenseMiki = filteredByDate
+    .filter((t) => t.type === 'pengeluaran' && t.user_name === 'Miki')
     .reduce((sum, t) => sum + t.amount, 0)
 
   const netBalance = totalIncome - totalExpense
@@ -149,7 +159,7 @@ export default function Home() {
     <main className="min-h-screen bg-slate-50/50 py-8 px-4">
       <div className="max-w-2xl mx-auto space-y-6">
 
-        {/* HEADER: TITLE + OPTION BULAN & TAHUN */}
+        {/* HEADER: JUDUL + DROPDOWN BULAN & TAHUN */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <span className="text-xs font-semibold text-emerald-800 tracking-wider uppercase">Pencatat Keuangan Keluarga</span>
@@ -179,7 +189,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* TOGGLE GAJIAN */}
+        {/* TOGGLE SIKLUS GAJIAN */}
         <div className="bg-white border border-slate-200/80 rounded-2xl p-3.5 shadow-sm flex items-center justify-between">
           <div>
             <p className="text-xs font-bold text-slate-800">Mode Siklus Gajian Otomatis</p>
@@ -193,7 +203,7 @@ export default function Home() {
           />
         </div>
 
-        {/* BATCH BUTTON */}
+        {/* TOMBOL BATCH INPUT */}
         <button
           onClick={() => setIsBatchOpen(true)}
           className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm py-3 px-4 rounded-2xl shadow-sm transition-all flex items-center justify-center gap-2"
@@ -201,7 +211,7 @@ export default function Home() {
           <span>⚡</span> Input Banyak Transaksi (Batch)
         </button>
 
-        {/* KARTU SALDO + MASKOT */}
+        {/* KARTU SALDO UTAMA + MASKOT + RINCIAN EXPENSE JAE & MIKI */}
         <div className="bg-emerald-950 text-white p-6 rounded-3xl shadow-md border border-emerald-900 space-y-6">
           <div className="flex justify-between items-start">
             <div>
@@ -218,18 +228,37 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 pt-4 border-t border-emerald-900/80 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-emerald-900/80 text-xs">
+            {/* Total Pemasukan */}
             <div>
               <span className="text-emerald-400 font-medium">Total Pemasukan</span>
               <p className="text-base font-bold text-emerald-300 mt-0.5">
                 + Rp {new Intl.NumberFormat('id-ID').format(totalIncome)}
               </p>
             </div>
+
+            {/* Total Pengeluaran + Rincian Jae & Miki */}
             <div>
               <span className="text-emerald-400 font-medium">Total Pengeluaran</span>
               <p className="text-base font-bold text-red-300 mt-0.5">
                 - Rp {new Intl.NumberFormat('id-ID').format(totalExpense)}
               </p>
+
+              {/* Sub-Total Pengeluaran Jae & Miki */}
+              <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-emerald-900/60 text-[11px]">
+                <div className="bg-emerald-900/70 px-2 py-1 rounded-lg border border-emerald-800">
+                  <span className="text-emerald-300">👨‍🦱 Jae: </span>
+                  <span className="font-semibold text-white">
+                    Rp {new Intl.NumberFormat('id-ID').format(totalExpenseJae)}
+                  </span>
+                </div>
+                <div className="bg-emerald-900/70 px-2 py-1 rounded-lg border border-emerald-800">
+                  <span className="text-purple-300">👩 Miki: </span>
+                  <span className="font-semibold text-white">
+                    Rp {new Intl.NumberFormat('id-ID').format(totalExpenseMiki)}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -244,7 +273,7 @@ export default function Home() {
               </span>
             </h3>
 
-            {/* TOGGLE FILTER USER (Semua / Jae / Miki) */}
+            {/* FILTER USER (Semua / Jae / Miki) */}
             <div className="flex bg-slate-200/80 p-0.5 rounded-xl text-xs font-bold">
               {['Semua', 'Jae', 'Miki'].map((usr) => (
                 <button
@@ -278,7 +307,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* DOKUMEN TABEL FLAT RIWAYAT */}
+        {/* DOKUMEN TABEL FLAT RIWAYAT TRANSAKSI */}
         <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm overflow-hidden">
           {loading ? (
             <div className="p-8 text-center text-slate-400 text-sm">Memuat transaksi...</div>
